@@ -1,0 +1,20 @@
+AURA OS v0.8.5 CRM CORE — DROP-IN PATCH
+
+1. Stop the Ziya system cleanly:
+   .\stop-ziya-system.ps1
+
+2. Copy this patch into the ACTIVE Aura installation (not the patch source folder).
+
+3. Verify:
+   Get-Content ".\package.json" | Select-String '"version"'
+   Expected: "version": "0.8.5"
+
+4. Test CRM first:
+   npm run test:crm
+
+5. Then run the full regression suite.
+
+6. Start Aura normally:
+   .\start-aura.ps1
+
+The first start creates data\crm.json and imports current Aura leads/drafts/outbound/Tony Observer metadata without modifying Tony.

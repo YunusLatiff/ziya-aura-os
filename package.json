@@ -1,0 +1,25 @@
+{
+  "name": "aura-os",
+  "version": "0.8.7",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node tests/run-tests.mjs",
+    "test:phase2": "node tests/phase2-tests.mjs",
+    "test:phase3": "node tests/phase3-tests.mjs",
+    "test:phase4": "node tests/phase4-tests.mjs",
+    "test:phase5": "node tests/phase5-tests.mjs",
+    "test:phase6": "node tests/phase6-tests.mjs",
+    "test:phase6.1": "node tests/phase6-1-tests.mjs",
+    "test:phase6.2": "node tests/phase6-2-tests.mjs",
+    "test:phase7": "node tests/phase7-tests.mjs",
+    "test:phase8": "node tests/phase8-tests.mjs",
+    "test:crm": "node tests/crm-tests.mjs",
+    "test:phase8.6": "node tests/phase8-6-tests.mjs",
+    "test:phase8.7": "node tests/phase8-7-tests.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

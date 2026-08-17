@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {mayCommand} from '../src/agents.mjs';
+import {reviewLead} from '../src/friday.mjs';
+assert.equal(mayCommand('Aura','Vision'),true);
+assert.equal(mayCommand('Friday','Vision'),true);
+assert.equal(mayCommand('Friday','Ultron'),false);
+assert.equal(mayCommand('Ultron','Pepper'),true);
+for(const actor of ['Aura','Steve','Friday','Vision','Peter','MJ','Pepper','Ultron']) assert.equal(mayCommand(actor,'Tony'),false,`${actor} must never command Tony`);
+const base={id:'1',companyName:'TEST Industrial',address:'1 Test Road',website:'https://example.org',contactPerson:'Test Person',contactRole:'Operations Manager',contactNumber:'011 000 0000',email:'info@example.org',evidence:[{url:'https://example.org',detail:'test'},{url:'https://example.org/about',detail:'test'}],dedupeKey:'test|1'};
+let r=reviewLead({...base,agent:'Vision',facilityType:'MANUFACTURING',estimatedKwhMin:120000,estimatedKwhMax:240000,usageConfidence:'MEDIUM'},[]);assert.equal(r.status,'APPROVED');
+r=reviewLead({...base,id:'2',agent:'Vision',facilityType:'MANUFACTURING',estimatedKwhMin:80000,estimatedKwhMax:180000,usageConfidence:'MEDIUM'},[]);assert.equal(r.status,'REJECTED');
+r=reviewLead({...base,id:'3',agent:'Peter',facilityType:'OFFICE_PARK',estimatedKwhMin:5000,estimatedKwhMax:65000,usageConfidence:'MEDIUM'},[]);assert.equal(r.status,'APPROVED');
+r=reviewLead({...base,id:'4',agent:'MJ',facilityType:'APARTMENT_COMPLEX',unitCount:69,usageConfidence:'HIGH'},[]);assert.equal(r.status,'REJECTED');
+r=reviewLead({...base,id:'5',agent:'MJ',facilityType:'APARTMENT_COMPLEX',unitCount:70,usageConfidence:'HIGH'},[]);assert.equal(r.status,'APPROVED');
+console.log('Aura OS v0.2.5 core tests passed. Tony protection and Phase 2 Friday rules enforced.');

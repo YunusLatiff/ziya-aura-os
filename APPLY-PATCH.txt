@@ -1,0 +1,14 @@
+Aura OS v0.7.0 — Phase 7 Tony Observatory
+
+This is a DROP-IN PATCH, not a standalone Aura installation.
+
+Apply it to the active Aura OS folder after v0.6.2.
+
+1. Stop Aura.
+2. Copy this patch's contents into the active Aura folder with -Recurse -Force.
+3. Verify package.json shows 0.7.0.
+4. Run .\configure-tony-observer.ps1 (recommended; auto-detection also exists).
+5. Run npm test through npm run test:phase7.
+6. Restart Aura.
+
+Tony remains external and protected. The observer has no Tony command, write, credential or configuration access.

@@ -1,0 +1,8 @@
+1. Stop Ziya production system.
+2. Copy this patch over the active Aura installation.
+3. Run: .\configure-v0.8.7.ps1
+4. Run: npm run test:phase8.7
+5. Recommended full regression: npm test; npm run test:phase2; npm run test:phase3; npm run test:phase4; npm run test:phase5; npm run test:phase6; npm run test:phase6.1; npm run test:phase6.2; npm run test:phase7; npm run test:phase8; npm run test:crm; npm run test:phase8.6; npm run test:phase8.7
+6. Start Aura normally.
+
+Important: the 60 approved leads/month per researcher cap remains authoritative. Three 10-lead approved batches per day can therefore exhaust an agent's monthly quota in about two ideal days.

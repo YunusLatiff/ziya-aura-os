@@ -1,0 +1,41 @@
+﻿# Secrets / credentials
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Runtime state
+logs/
+backups/
+data/*.json
+
+# Temporary files
+*.log
+*.tmp
+*.bak
+
+# Playwright output
+playwright-report/
+test-results/
+
+# Windows / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+
+# Historical / drop-in build folders
+Aura-OS-v0.2.2-Tavily-Geoapify/
+Aura-OS-v0.2.4-Lead-Integrity-DropIn-Patch/
+Aura-OS-v0.2.5-Gauteng-Registry-Budget-DropIn-Patch/
+Aura-OS-v0.7.0-Phase7-Tony-Observatory-DropIn-Patch/
+Aura-OS-v0.8.0-Production-Hardening-DropIn-Patch/
+Aura-OS-v0.8.5-Ziya-CRM-Core-DropIn-Patch/
+
+# Runtime / customer / CRM state
+data/
+logs/
+backups/
+

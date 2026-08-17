@@ -1,0 +1,36 @@
+AURA OS v0.8.6 — DUAL PORT + LEAD QUOTA + TAVILY GUARD
+
+1. Stop the current system:
+   .\stop-ziya-system.ps1
+
+2. Copy this patch's CONTENTS into the active Aura installation root.
+   This ZIP is intentionally flat: there is no duplicate nested patch folder.
+
+3. Verify:
+   Get-Content ".\package.json" | Select-String '"version"'
+   Expected: "version": "0.8.6"
+
+4. Configure ports/quotas:
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+   .\configure-v0.8.6.ps1
+
+5. Store the new Tavily API key locally:
+   .\configure-tavily-key.ps1
+   Do not paste the key into source code or chat logs.
+
+6. Test:
+   npm run test:phase8.6
+   npm run test:crm
+   npm run test:phase8
+
+7. Start:
+   .\start-aura.ps1
+
+8. Verify:
+   .\status-ziya-system.ps1
+
+Expected:
+   Aura Dashboard : ONLINE :4310
+   Ziya CRM       : ONLINE :4311
+   Tony           : ONLINE
+   Watchdog       : ONLINE

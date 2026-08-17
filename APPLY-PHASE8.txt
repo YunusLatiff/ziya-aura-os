@@ -1,0 +1,12 @@
+AURA OS v0.8.0 PRODUCTION HARDENING — DROP-IN PATCH
+
+1. Stop Aura/Tony before copying the patch if they are currently running.
+2. Copy every file/folder in this patch into the ACTIVE Aura installation and overwrite when asked.
+3. Verify package.json says version 0.8.0.
+4. Run: npm run test:phase8
+5. Run: .\configure-production.ps1
+6. Run: .\install-ziya-autostart.ps1
+7. Run: .\start-aura.ps1
+8. Run: .\status-ziya-system.ps1
+
+Tony is not modified by this patch.
