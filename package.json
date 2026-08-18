@@ -21,5 +21,9 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "^1.62.1",
+    "robots-parser": "^3.0.1"
   }
 }

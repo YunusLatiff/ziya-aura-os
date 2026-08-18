@@ -39,3 +39,6 @@ data/
 logs/
 backups/
 
+
+# Local inspection / diagnostic files
+local-discovery-current-code.txt
