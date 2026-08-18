@@ -22,18 +22,20 @@ import {startTonyObserverScheduler} from './tony-observer-scheduler.mjs';
 import {initCrm,syncLegacyAuraData,crmSummary,listCompanies,listOpportunities,getOpportunity,listActivities,listTasks,sourcePerformance,agentPerformance,changeOpportunityStage,markOpportunityWon,markOpportunityLost,addTask,publishAgentUpdate,CRM_SOURCES,CRM_STAGES} from './crm.mjs';
 import {startCrmScheduler,crmSyncTick} from './crm-scheduler.mjs';
 import {leadQuotaStatus} from './lead-quota.mjs';
+import {natashaStatus} from './natasha.mjs';
+import {startNatashaScheduler,natashaSchedulerTick,setNatashaPaused} from './natasha-scheduler.mjs';
 const __dirname=path.dirname(fileURLToPath(import.meta.url));
 const publicDir=path.resolve(__dirname,'../public');
 const port=Number(process.env.AURA_PORT||4310);
 const crmUiPort=Number(process.env.CRM_PORT||4311);
 const clients=new Set();
-seed();recoverInterruptedOutboundReservations();initCrm();syncLegacyAuraData();startScheduler();startOutreachScheduler();startOutboundScheduler();startMonitorScheduler();startTonyObserverScheduler();startCrmScheduler();
+seed();recoverInterruptedOutboundReservations();initCrm();syncLegacyAuraData();startScheduler();startOutreachScheduler();startOutboundScheduler();startMonitorScheduler();startTonyObserverScheduler();startCrmScheduler();startNatashaScheduler();
 function json(res,status,obj){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(obj))}
 function body(req){return new Promise((resolve,reject)=>{let s='';req.on('data',c=>{s+=c;if(s.length>1e6)req.destroy()});req.on('end',()=>{try{resolve(s?JSON.parse(s):{})}catch(e){reject(e)}});req.on('error',reject)})}
 function broadcast(event){const msg=`data: ${JSON.stringify(event)}\n\n`;for(const res of clients){try{res.write(msg)}catch{clients.delete(res)}}}
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,`http://${req.headers.host}`);
-  if(url.pathname==='/api/status'&&req.method==='GET'){await refreshProviderStatus();return json(res,200,{...snapshot(),leadCycle:leadCycleStatus(),leadQuota:leadQuotaStatus(),outreach:outreachStatus(),outbound:outboundStatus(),monitoring:monitoringStatus(),auraConversation:auraConversationStatus(),tonyObserver:tonyObserverStatus(),crm:crmSummary(),crmUi:{port:crmUiPort,url:`http://localhost:${crmUiPort}`}})}
+  if(url.pathname==='/api/status'&&req.method==='GET'){await refreshProviderStatus();return json(res,200,{...snapshot(),leadCycle:leadCycleStatus(),leadQuota:leadQuotaStatus(),outreach:outreachStatus(),outbound:outboundStatus(),monitoring:monitoringStatus(),auraConversation:auraConversationStatus(),tonyObserver:tonyObserverStatus(),natasha:natashaStatus(),crm:crmSummary(),crmUi:{port:crmUiPort,url:`http://localhost:${crmUiPort}`}})}
   if(url.pathname==='/api/lead-quota'&&req.method==='GET')return json(res,200,leadQuotaStatus());
   if(url.pathname==='/api/events'&&req.method==='GET')return json(res,200,snapshot().events);
   if(url.pathname==='/api/leads'&&req.method==='GET'){const db=load();const agent=url.searchParams.get('agent');const status=url.searchParams.get('status');let leads=db.leads||[];if(agent)leads=leads.filter(x=>x.agent===agent);if(status)leads=leads.filter(x=>x.fridayStatus===status);return json(res,200,leads.slice().reverse().slice(0,500))}
@@ -68,6 +70,47 @@ const server=http.createServer(async(req,res)=>{
   if(crmLost&&req.method==='POST'){try{const b=await body(req);const result=markOpportunityLost(b.actor||'Owner',decodeURIComponent(crmLost[1]),{reason:b.reason,ownerInstruction:!!b.ownerInstruction});broadcast({type:'refresh'});return json(res,200,result)}catch(e){return json(res,400,{error:String(e.message||e)})}}
   if(url.pathname==='/api/tony/status'&&req.method==='GET')return json(res,200,tonyObserverStatus());
   if(url.pathname==='/api/tony/refresh'&&req.method==='POST'){try{const result=await refreshTonyObservation();broadcast({type:'refresh'});return json(res,200,{ok:true,...result})}catch(e){return json(res,500,{error:String(e)})}}
+
+  if(url.pathname==='/api/natasha/status'&&req.method==='GET')return json(res,200,natashaStatus());
+
+  if(url.pathname==='/api/natasha/posts'&&req.method==='GET'){
+    const posts=(load().natashaPosts||[])
+      .slice()
+      .sort((a,b)=>new Date(a.scheduledAt||a.createdAt)-new Date(b.scheduledAt||b.createdAt));
+
+    return json(res,200,posts);
+  }
+
+  if(url.pathname==='/api/natasha/run-once'&&req.method==='POST'){
+    try{
+      const result=await natashaSchedulerTick();
+      broadcast({type:'refresh'});
+      return json(res,200,{ok:true,...result});
+    }catch(e){
+      return json(res,500,{error:String(e)});
+    }
+  }
+
+  if(url.pathname==='/api/natasha/pause'&&req.method==='POST'){
+    try{
+      const result=setNatashaPaused(true);
+      broadcast({type:'refresh'});
+      return json(res,200,{ok:true,natasha:result});
+    }catch(e){
+      return json(res,500,{error:String(e)});
+    }
+  }
+
+  if(url.pathname==='/api/natasha/resume'&&req.method==='POST'){
+    try{
+      const result=setNatashaPaused(false);
+      broadcast({type:'refresh'});
+      queueMicrotask(()=>natashaSchedulerTick().catch(()=>{}));
+      return json(res,200,{ok:true,natasha:result});
+    }catch(e){
+      return json(res,500,{error:String(e)});
+    }
+  }
 
   if(url.pathname==='/api/monitor/scan'&&req.method==='POST'){try{const result=await runHealthScan();broadcast({type:'refresh'});return json(res,200,{ok:true,...result})}catch(e){return json(res,500,{error:String(e)})}}
   if(url.pathname==='/api/monitor/report'&&req.method==='POST'){try{const result=await generateSteveReport();broadcast({type:'refresh'});return json(res,200,{ok:true,report:result})}catch(e){return json(res,500,{error:String(e)})}}
