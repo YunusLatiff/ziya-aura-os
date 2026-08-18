@@ -59,12 +59,14 @@ function triggerPepperForApprovedLead(leadId){
 }
 function normalizePhone(s=''){return String(s).replace(/\s+/g,' ').trim()}
 const BAD_OUTREACH_EMAIL=/\b(tip-?offs?|whistle|fraud|ethics|privacy|popia|legal|careers?|jobs?|recruit|noreply|no-reply|abuse|security)\b/i;
+const PLACEHOLDER_EMAIL=/^(?:contact|info|sales|admin|hello|test)@(?:email|example)\.(?:com|co\.za)$/i;
 
 function emailScore(email='',companyDomain=''){
   const value=String(email||'').trim().toLowerCase();
 
   if(!value.includes('@')) return -1000;
   if(BAD_OUTREACH_EMAIL.test(value)) return -1000;
+  if(PLACEHOLDER_EMAIL.test(value)) return -1000;
 
   const [local='',domain='']=value.split('@');
   let score=0;
@@ -104,6 +106,67 @@ const MJ_GENERIC_LOCATION=/\b(residential street|residential road|street|road|av
 const MJ_NAME_SIGNAL=/\b(estate|apartments?|apartment complex|residences?|residential complex|village|sectional title|homeowners association|hoa)\b/i;
 const PETER_PAGE_NOISE=/\b(shop\b.*\bat\b|shops in|store locator|directory|jobs?|vacanc(?:y|ies)|retail jobs|online directories)\b/i;
 
+const DISCOVERY_ONLY_DOMAINS=/officespaceonline|infoisinfo|ccbc\.co\.za|fordauthority|dnb\.com|mylifegb|maps\.apple\.com|openwindow\.co\.za|investsa\.gov\.za|auto-parts-africa|marketinsidedata|volza|saisc\.co\.za/i;
+
+const ADDRESS_NOISE=/\b(items?|facebook|instagram|store direct|situated near|located near|trading hours|directions|opening hours|ptacold|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+
+const VISION_PRODUCT_PAGE_NOISE=/\b(mobile cold room|portable cold room|product page|products for sale|buy now|rental|rentals|for hire|equipment hire)\b/i;
+
+const VISION_SERVICE_PROVIDER=/\b(contractor|contractors|installer|installers|installation company|equipment supplier|equipment suppliers|refrigeration services?|cold room design|design and build|design & build|consultant|consulting)\b/i;
+
+const VISION_OPERATOR_EVIDENCE=/\b(our factory|our factories|manufacturing facility|production facility|processing plant|assembly plant|industrial plant|our warehouse|distribution cent(?:re|er)|cold storage facility|cold store|packhouse|operates? (?:a|the|our)|operating facility|plant located|factory located)\b/i;
+
+function addressLooksClean(address='',agent=''){
+  const a=String(address||'').replace(/\s+/g,' ').trim();
+
+  if(a.length<10||a.length>170) return false;
+  if(ADDRESS_NOISE.test(a)) return false;
+  if(/\b(?:R|Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s*$/i.test(a)) return false;
+
+  if(
+    agent!=='MJ' &&
+    !/\b(street|st|road|rd|avenue|ave|drive|dr|boulevard|blvd|lane|ln|close|crescent|cres|parkway|highway)\b/i.test(a)
+  ){
+    return false;
+  }
+
+  return true;
+}
+
+function refineFacilityType(agent,classification,text=''){
+  const out={
+    ...classification,
+    signals:{...(classification?.signals||{})}
+  };
+
+  if(agent!=='Peter') return out;
+
+  const t=String(text||'');
+
+  // A retailer located inside a shopping centre is still a RETAIL lead.
+  if(
+    /\b(supermarket|grocery store|food lover'?s market|checkers|pick n pay|shoprite|kwikspar|superspar|woolworths food)\b/i.test(t)
+  ){
+    out.facilityType='RETAIL';
+    return out;
+  }
+
+  if(
+    /\b(office park|business park|office building|commercial office)\b/i.test(t)
+  ){
+    out.facilityType='OFFICE_PARK';
+    return out;
+  }
+
+  if(
+    /\b(shopping cent(?:re|er)|retail cent(?:re|er)|shopping mall|\bmall\b)\b/i.test(t)
+  ){
+    out.facilityType='SHOPPING_CENTRE';
+  }
+
+  return out;
+}
+
 function regionMatchesAddress(region,address=''){
   const r=String(region||'').toLowerCase();
   const a=String(address||'').toLowerCase();
@@ -122,12 +185,32 @@ function preFridayIntegrity(lead){
   const aggregate=`${name} ${lead.address||''} ${lead.sector||''} ${(lead.evidence||[]).map(e=>e.detail||'').join(' ')}`;
 
   if(!lead.companyName||GENERIC_NAMES.test(cleanCompanyName(lead.companyName))) reasons.push('Generic or missing entity name.');
-  if(!lead.address) reasons.push('No physical address verified.');
-  else if(!regionMatchesAddress(lead.region,lead.address)) reasons.push('Address does not match the active research region.');
+  if(!lead.address){
+    reasons.push('No physical address verified.');
+  }else{
+    if(!addressLooksClean(lead.address,lead.agent)){
+      reasons.push('Physical address extraction is incomplete or contaminated by webpage text.');
+    }
+
+    if(!regionMatchesAddress(lead.region,lead.address)){
+      reasons.push('Address does not match the active research region.');
+    }
+  }
 
   if(lead.agent==='Vision'){
     if(PUBLIC_INSTITUTION.test(aggregate)) reasons.push('Non-industrial public/institutional entity.');
     if(VISION_RETAIL_NOISE.test(name)) reasons.push('Retail/outlet/non-industrial entity.');
+
+    if(VISION_PRODUCT_PAGE_NOISE.test(name)){
+      reasons.push('Product/rental page rather than an operating industrial facility.');
+    }
+
+    if(
+      VISION_SERVICE_PROVIDER.test(name) &&
+      !VISION_OPERATOR_EVIDENCE.test(aggregate)
+    ){
+      reasons.push('Industrial supplier/contractor without evidence that it operates the qualifying high-load facility.');
+    }
     if(!['MANUFACTURING','WAREHOUSE'].includes(lead.facilityType)) reasons.push('Not an industrial facility.');
     if(!(Number.isFinite(lead.estimatedKwhMin)&&lead.estimatedKwhMin>=Number(policy.kwhMin))) reasons.push('Lower usage estimate below the active Vision threshold.');
     if(!['HIGH','MEDIUM'].includes(lead.usageConfidence)) reasons.push('Industrial scale evidence too weak.');
@@ -160,6 +243,10 @@ function looksLikeCandidate(agent,c){
   const domain=domainOf(c.url||c.website||'');
   if(!name||name.length<3||GENERIC_NAMES.test(name)) return false;
   if(domain&&NOISE_DOMAINS.test(domain)) return false;
+
+  // Directories, brokers and aggregators can appear in search,
+  // but cannot themselves become the approved lead entity.
+  if(domain&&DISCOVERY_ONLY_DOMAINS.test(domain)) return false;
   if(NOISE_TEXT.test(text)) return false;
   if(agent==='Vision') return /manufactur|factory|production|processing plant|fabricat|assembly|industrial plant|warehouse|distribution cent(?:re|er)|cold storage|cold chain|logistics hub/i.test(text);
   if(agent==='Peter') return /shopping cent(?:re|er)|mall|retail cent(?:re|er)|supermarket|office park|business park|commercial office|office building|retail store/i.test(text);
@@ -514,10 +601,14 @@ async function enrichCandidate(agent,candidate,context){
     domainOf(website)
   );
 
-  const classification=classifyLead(
+  const classification=refineFacilityType(
     agent,
-    aggregate,
-    candidate.types||[]
+    classifyLead(
+      agent,
+      aggregate,
+      candidate.types||[]
+    ),
+    `${companyName} ${candidate.title||''} ${candidate.description||''} ${siteText.slice(0,8000)}`
   );
 
   const usage=estimateUsage(

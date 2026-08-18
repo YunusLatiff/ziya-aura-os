@@ -199,44 +199,115 @@ export function extractLocalAddress(
   text,
   region=''
 ){
-  const input = String(text || '')
-    .replace(/\r/g,'')
-    .replace(/[ \t]+/g,' ')
-    .replace(/\n{3,}/g,'\n\n')
+  const input=String(text||'')
+    .replace(/\\r/g,'')
+    .replace(/[ \\t]+/g,' ')
+    .replace(/\\n{3,}/g,'\\n\\n')
     .trim();
 
   if(!input) return '';
 
-  const patterns = [
-    /\b\d{1,5}\s+[A-Za-z0-9][A-Za-z0-9 &'().\-]{2,70}\s(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Boulevard|Blvd|Lane|Ln|Close|Crescent|Cres|Parkway|Highway)\b(?:[\s,]+[A-Za-z][A-Za-z .'\-]{2,50}){1,3}(?:[\s,]+\d{4})?/gi,
+  const lines=input
+    .split(/\\n+/)
+    .map(x=>x.trim())
+    .filter(Boolean);
 
-    /\b(?:Cnr|Corner)\s+[A-Za-z0-9 .'\-]{2,60}\s+(?:and|&)\s+[A-Za-z0-9 .'\-]{2,60}(?:,\s*[A-Za-z][A-Za-z .'\-]{2,50}){1,3}(?:,\s*\d{4})?/gi
+  const patterns=[
+    /\\b\\d{1,5}\\s+[A-Za-z0-9][A-Za-z0-9 &'().\\-]{1,70}\\s(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Boulevard|Blvd|Lane|Ln|Close|Crescent|Cres|Parkway|Highway)\\b(?:[ \\t,.-]+[A-Za-z][A-Za-z .'\\-]{1,40}){0,3}(?:[ \\t,]+\\d{4})?/gi,
+
+    /\\b(?:Cnr|Corner)\\s+[A-Za-z0-9 .'\\-]{2,60}\\s+(?:and|&)\\s+[A-Za-z0-9 .'\\-]{2,60}(?:[ \\t,]+[A-Za-z][A-Za-z .'\\-]{1,40}){0,3}(?:[ \\t,]+\\d{4})?/gi
   ];
 
-  const candidates = [];
+  const candidates=[];
 
-  for(const pattern of patterns){
-    for(const match of input.matchAll(pattern)){
-      const value = String(match[0] || '')
-        .replace(/^(?:\+27|0)[0-9 ()-]{8,16}\s*/,'')
-        .replace(/\s+/g,' ')
-        .trim()
-        .slice(0,220);
+  function cleanValue(raw=''){
+    let value=String(raw||'')
+      .replace(/^(?:\\+27|0)[0-9 ()-]{8,16}\\s*/,'')
+      .trim();
 
-      if(value.length < 12) continue;
+    // If page text precedes the street number, start at the address.
+    value=value.replace(
+      /^.*?(?=\\b\\d{1,5}\\s+[A-Za-z0-9])/,
+      ''
+    );
 
-      candidates.push({
-        value,
-        score:scoreAddress(value,region)
-      });
+    // Handles strings like:
+    // "1 Waterfall Ridge Shopping Centre 8 Ridge Road ..."
+    const streetSuffix=value.search(
+      /\\b(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Boulevard|Blvd|Lane|Ln|Close|Crescent|Cres|Parkway|Highway)\\b/i
+    );
+
+    if(streetSuffix>0){
+      const before=value.slice(0,streetSuffix);
+      const numbers=[...before.matchAll(/\\b\\d{1,5}\\b/g)];
+
+      if(numbers.length>1){
+        const last=numbers[numbers.length-1];
+        value=value.slice(last.index);
+      }
+    }
+
+    // Stop when navigation/opening-hours/marketing copy starts.
+    value=value.replace(
+      /\\b(?:Facebook|Instagram|HOME|ABOUT|STORE|DIRECT|Situated near|Located near|Trading Hours|Opening Hours|Directions|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|ptacold)\\b.*$/i,
+      ''
+    );
+
+    // A postal code is a strong natural end-of-address marker.
+    const postal=value.match(/\\b\\d{4}\\b/);
+
+    if(postal){
+      value=value.slice(
+        0,
+        postal.index+postal[0].length
+      );
+    }else{
+      // Otherwise stop at a South African province when present.
+      const province=value.match(
+        /\\b(Gauteng|Limpopo|Mpumalanga|North West|Free State|KwaZulu-Natal|Western Cape|Eastern Cape|Northern Cape)\\b/i
+      );
+
+      if(province){
+        value=value.slice(
+          0,
+          province.index+province[0].length
+        );
+      }
+    }
+
+    value=value
+      .replace(/\\s+[A-Z]$/,'')
+      .replace(/[|;:,.-]+$/,'')
+      .replace(/\\s+/g,' ')
+      .trim();
+
+    return value.slice(0,180);
+  }
+
+  for(const rawLine of lines){
+    const line=rawLine.slice(0,600);
+
+    for(const pattern of patterns){
+      pattern.lastIndex=0;
+
+      for(const match of line.matchAll(pattern)){
+        const value=cleanValue(match[0]);
+
+        if(value.length<12) continue;
+
+        candidates.push({
+          value,
+          score:scoreAddress(value,region)
+        });
+      }
     }
   }
 
   candidates.sort(
-    (a,b) =>
+    (a,b)=>
       b.score-a.score ||
       a.value.length-b.value.length
   );
 
-  return candidates[0]?.value || '';
+  return candidates[0]?.value||'';
 }
