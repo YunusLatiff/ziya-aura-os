@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+﻿import crypto from 'node:crypto';
 import {mutate,load} from './store.mjs';
 import {logEvent} from './orchestrator.mjs';
 import {DEFAULT_REGIONS,COMMON_EXCLUDED_DOMAINS} from './research-config.mjs';
@@ -61,9 +61,9 @@ function normalizePhone(s=''){return String(s).replace(/\s+/g,' ').trim()}
 function genericEmailScore(e=''){const local=e.split('@')[0].toLowerCase();return /^(info|sales|contact|admin|enquiries|hello|reception)/.test(local)?1:2}
 function selectEmail(emails=[]){return [...emails].sort((a,b)=>genericEmailScore(b)-genericEmailScore(a))[0]||''}
 
-const NOISE_DOMAINS=/indeed|pnet|careers24|glassdoor|adzuna|joblife|tripadvisor|wikipedia|facebook|instagram|youtube|tiktok|linkedin|property24|privateproperty|gumtree|bizcommunity|brabys|snupit|cylex|yellowpages|hotfrog/i;
+const NOISE_DOMAINS=/indeed|simplyhired|pnet|careers24|glassdoor|adzuna|joblife|tripadvisor|wikipedia|facebook|instagram|youtube|tiktok|linkedin|property24|privateproperty|gumtree|bizcommunity|brabys|snupit|cylex|yellowpages|hotfrog|aeroleads|rocketreach|apollo\.io|zoominfo|lusha|signalhire|contactout/i;
 const GENERIC_NAMES=/^(factory|factories|manufacturing|manufacturer|warehouse|warehouses|johannesburg|pretoria|midrand|ekurhuleni|gauteng|south africa|shopping centre|shopping center|shopping mall|office park|commercial building|apartment complex|residential estate|home|contact|about)$/i;
-const NOISE_TEXT=/\b(jobs?|vacanc(?:y|ies)|careers?|salary|salaries|reviews?|things to do|tourist|tourism|top \d+|best outlets?|directory|list of|full list|businesses in|all you should know|for sale|to rent|property listings?|recruitment agenc(?:y|ies)|press release|news article|employee reviews?)\b/i;
+const NOISE_TEXT=/\b(jobs?|vacanc(?:y|ies)|careers?|salary|salaries|reviews?|things to do|tourist|tourism|top \d+|top companies|best outlets?|directory|directories|list of|company list|companies in|full list|businesses in|emails? & contacts?|contact database|lead database|sales intelligence|all you should know|for sale|to rent|property listings?|recruitment agenc(?:y|ies)|press release|news article|employee reviews?)\b/i;
 
 const PUBLIC_INSTITUTION=/\b(municipal|municipality|metro police|police department|government|department of|tvet|college|university|school|clinic|hospital|radio|fm\b|church|mosque|hotel|lodge|restaurant|museum|stadium|library|pay point|head office)\b/i;
 const VISION_RETAIL_NOISE=/\b(factory shop|factory store|outlet|retail|shopping|dance|fitness|gym|salon|showroom)\b/i;
@@ -138,8 +138,8 @@ function personFromResult(result,company=''){
   const raw=`${result.title||''} ${result.description||''}`.replace(/\s+/g,' ');
   const role='(?:facilities?|facility|operations?|property|centre|center|general|plant|maintenance|energy|engineering|technical|estate|building|portfolio|asset)\\s+(?:manager|director|head|executive)|(?:manager|director|head)\\s+(?:of\\s+)?(?:facilities?|operations?|property|engineering|maintenance)';
   const name='([A-Z][a-z]+(?:\\s+[A-Z][a-z]+){1,2})';
-  let m=raw.match(new RegExp(`${name}\\s*(?:[-–—|,]|is|:)\\s*(${role})`,'i'));
-  if(!m) m=raw.match(new RegExp(`(${role})\\s*(?:[-–—|,:]|at|is)\\s*${name}`,'i'));
+  let m=raw.match(new RegExp(`${name}\\s*(?:[-â€“â€”|,]|is|:)\\s*(${role})`,'i'));
+  if(!m) m=raw.match(new RegExp(`(${role})\\s*(?:[-â€“â€”|,:]|at|is)\\s*${name}`,'i'));
   if(!m) return null;
   const firstIsRole=/manager|director|head|facilit|operation|property|plant|maintenance|engineering|technical/i.test(m[1]);
   const person=firstIsRole?m[2]:m[1];
@@ -711,7 +711,7 @@ export function ensureBatch(agent){
     if(d.agents[agent]){
       d.agents[agent].status='WORKING';
       d.agents[agent].lastError=null;
-      d.agents[agent].currentTask=`Building daily batch ${daily.started+1}/${daily.limit} · batch #${batch.batchNumber} (0/${batch.targetSize} approved)`;
+      d.agents[agent].currentTask=`Building daily batch ${daily.started+1}/${daily.limit} Â· batch #${batch.batchNumber} (0/${batch.targetSize} approved)`;
       d.agents[agent].lastHeartbeat=now();
     }
   });
@@ -745,7 +745,7 @@ function updateBatchProgress(batchId){
       if(d.agents?.[x.agent]){
         d.agents[x.agent].status='WORKING';
         d.agents[x.agent].lastError=null;
-        d.agents[x.agent].currentTask=`Building batch #${x.batchNumber} (${summary.approved}/${x.targetSize} approved · ${summary.replacementsNeeded} still needed)`;
+        d.agents[x.agent].currentTask=`Building batch #${x.batchNumber} (${summary.approved}/${x.targetSize} approved Â· ${summary.replacementsNeeded} still needed)`;
         d.agents[x.agent].lastHeartbeat=now();
       }
     }
@@ -889,7 +889,7 @@ export async function researchStep(agent){
   mutate(db=>{
     const b=(db.leadBatches||[]).find(x=>x.id===batch.id);
     if(b){b.searchCursor=found.nextCursor;b.updatedAt=now()}
-    if(db.agents[agent]){db.agents[agent].status='WORKING';db.agents[agent].lastError=null;db.agents[agent].currentTask=`Searching ${found.sector} · ${found.region} · ${approved}/${targetSize} approved`;db.agents[agent].lastHeartbeat=now()}
+    if(db.agents[agent]){db.agents[agent].status='WORKING';db.agents[agent].lastError=null;db.agents[agent].currentTask=`Searching ${found.sector} Â· ${found.region} Â· ${approved}/${targetSize} approved`;db.agents[agent].lastHeartbeat=now()}
   });
   logEvent(agent,'INFO','RESEARCH_QUERY',`${agent} searching: ${found.query}`,{batchId:batch.id,candidates:found.candidates.length});
 
@@ -1004,4 +1004,5 @@ export function prepareReplacements(agent){
   });
   return batch;
 }
+
 

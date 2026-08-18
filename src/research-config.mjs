@@ -1,11 +1,14 @@
-export const BATCH_SIZE = 10;
+﻿export const BATCH_SIZE = 10;
 export const RESEARCHERS = ['Vision','Peter','MJ'];
 
 export const COMMON_EXCLUDED_DOMAINS = [
   'linkedin.com','facebook.com','instagram.com','x.com','twitter.com','youtube.com','tiktok.com',
   'indeed.com','za.indeed.com','pnet.co.za','careers24.com','glassdoor.com','joblife.co.za','adzuna.co.za',
   'tripadvisor.com','tripadvisor.co.za','wikipedia.org','yelp.com','foursquare.com',
-  'property24.com','privateproperty.co.za','gumtree.co.za','mapquest.com'
+  'property24.com','privateproperty.co.za','gumtree.co.za','mapquest.com',
+  'aeroleads.com','simplyhired.com','rocketreach.co','apollo.io',
+  'zoominfo.com','lusha.com','signalhire.com','contactout.com',
+  'yellowpages.co.za','brabys.com','snupit.co.za','cylex.net.za'
 ];
 
 export const RESEARCH_PROFILES = {
@@ -59,3 +62,4 @@ export const GAUTENG_TERRITORY_NODES = [
 ];
 
 export const DEFAULT_REGIONS = GAUTENG_TERRITORY_NODES;
+
