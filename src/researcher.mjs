@@ -58,8 +58,41 @@ function triggerPepperForApprovedLead(leadId){
   }));
 }
 function normalizePhone(s=''){return String(s).replace(/\s+/g,' ').trim()}
-function genericEmailScore(e=''){const local=e.split('@')[0].toLowerCase();return /^(info|sales|contact|admin|enquiries|hello|reception)/.test(local)?1:2}
-function selectEmail(emails=[]){return [...emails].sort((a,b)=>genericEmailScore(b)-genericEmailScore(a))[0]||''}
+const BAD_OUTREACH_EMAIL=/\b(tip-?offs?|whistle|fraud|ethics|privacy|popia|legal|careers?|jobs?|recruit|noreply|no-reply|abuse|security)\b/i;
+
+function emailScore(email='',companyDomain=''){
+  const value=String(email||'').trim().toLowerCase();
+
+  if(!value.includes('@')) return -1000;
+  if(BAD_OUTREACH_EMAIL.test(value)) return -1000;
+
+  const [local='',domain='']=value.split('@');
+  let score=0;
+
+  if(/^(facilities?|operations?|property|energy|maintenance|engineering|procurement)/i.test(local)){
+    score+=8;
+  }
+
+  if(/^(sales|contact|enquiries|info|hello|reception|admin)/i.test(local)){
+    score+=4;
+  }
+
+  if(companyDomain&&(domain===companyDomain||domain.endsWith(`.${companyDomain}`))){
+    score+=6;
+  }
+
+  if(/gmail\.com|outlook\.com|hotmail\.com|yahoo\.com$/i.test(domain)){
+    score-=2;
+  }
+
+  return score;
+}
+
+function selectEmail(emails=[],companyDomain=''){
+  return [...new Set(emails)]
+    .filter(e=>emailScore(e,companyDomain)>-1000)
+    .sort((a,b)=>emailScore(b,companyDomain)-emailScore(a,companyDomain))[0]||'';
+}
 
 const NOISE_DOMAINS=/indeed|simplyhired|pnet|careers24|glassdoor|adzuna|joblife|tripadvisor|wikipedia|facebook|instagram|youtube|tiktok|linkedin|property24|privateproperty|gumtree|bizcommunity|brabys|snupit|cylex|yellowpages|hotfrog|aeroleads|rocketreach|apollo\.io|zoominfo|lusha|signalhire|contactout/i;
 const GENERIC_NAMES=/^(factory|factories|manufacturing|manufacturer|warehouse|warehouses|johannesburg|pretoria|midrand|ekurhuleni|gauteng|south africa|shopping centre|shopping center|shopping mall|office park|commercial building|apartment complex|residential estate|home|contact|about)$/i;
@@ -476,7 +509,10 @@ async function enrichCandidate(agent,candidate,context){
     phone=contacts.phones[0]||'';
   }
 
-  const email=selectEmail(contacts.emails);
+  const email=selectEmail(
+    contacts.emails,
+    domainOf(website)
+  );
 
   const classification=classifyLead(
     agent,

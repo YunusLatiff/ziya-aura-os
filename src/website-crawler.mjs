@@ -209,7 +209,9 @@ async function readPage(context, url) {
       status,
       title: result.title,
       text: String(result.text || '')
-        .replace(/\s+/g, ' ')
+        .replace(/\r/g, '')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
         .trim(),
       links: result.links || []
     };

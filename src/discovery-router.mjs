@@ -200,7 +200,9 @@ export function extractLocalAddress(
   region=''
 ){
   const input = String(text || '')
-    .replace(/\s+/g,' ')
+    .replace(/\r/g,'')
+    .replace(/[ \t]+/g,' ')
+    .replace(/\n{3,}/g,'\n\n')
     .trim();
 
   if(!input) return '';
@@ -216,6 +218,7 @@ export function extractLocalAddress(
   for(const pattern of patterns){
     for(const match of input.matchAll(pattern)){
       const value = String(match[0] || '')
+        .replace(/^(?:\+27|0)[0-9 ()-]{8,16}\s*/,'')
         .replace(/\s+/g,' ')
         .trim()
         .slice(0,220);
