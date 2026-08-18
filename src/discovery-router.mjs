@@ -200,46 +200,47 @@ export function extractLocalAddress(
   region=''
 ){
   const input=String(text||'')
-    .replace(/\\r/g,'')
-    .replace(/[ \\t]+/g,' ')
-    .replace(/\\n{3,}/g,'\\n\\n')
+    .replace(/\r/g,'')
+    .replace(/[ \t]+/g,' ')
+    .replace(/\n{3,}/g,'\n\n')
     .trim();
 
   if(!input) return '';
 
   const lines=input
-    .split(/\\n+/)
+    .split(/\n+/)
     .map(x=>x.trim())
     .filter(Boolean);
 
   const patterns=[
-    /\\b\\d{1,5}\\s+[A-Za-z0-9][A-Za-z0-9 &'().\\-]{1,70}\\s(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Boulevard|Blvd|Lane|Ln|Close|Crescent|Cres|Parkway|Highway)\\b(?:[ \\t,.-]+[A-Za-z][A-Za-z .'\\-]{1,40}){0,3}(?:[ \\t,]+\\d{4})?/gi,
+    /\b\d{1,5}\s+[A-Za-z0-9][A-Za-z0-9 &'().\-]{1,70}\s(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Boulevard|Blvd|Lane|Ln|Close|Crescent|Cres|Parkway|Highway)\b(?:[ \t,.-]+[A-Za-z][A-Za-z .'\-]{1,40}){0,4}(?:[ \t,]+\d{4})?/gi,
 
-    /\\b(?:Cnr|Corner)\\s+[A-Za-z0-9 .'\\-]{2,60}\\s+(?:and|&)\\s+[A-Za-z0-9 .'\\-]{2,60}(?:[ \\t,]+[A-Za-z][A-Za-z .'\\-]{1,40}){0,3}(?:[ \\t,]+\\d{4})?/gi
+    /\b(?:Cnr|Corner)\s+[A-Za-z0-9 .'\-]{2,60}\s+(?:and|&)\s+[A-Za-z0-9 .'\-]{2,60}(?:[ \t,]+[A-Za-z][A-Za-z .'\-]{1,40}){0,3}(?:[ \t,]+\d{4})?/gi
   ];
 
   const candidates=[];
 
   function cleanValue(raw=''){
     let value=String(raw||'')
-      .replace(/^(?:\\+27|0)[0-9 ()-]{8,16}\\s*/,'')
+      .replace(/^(?:\+27|0)[0-9 ()-]{8,16}\s*/,'')
       .trim();
 
-    // If page text precedes the street number, start at the address.
-    value=value.replace(
-      /^.*?(?=\\b\\d{1,5}\\s+[A-Za-z0-9])/,
-      ''
+    /*
+     * If junk precedes the actual street number, use the last
+     * plausible street-number token before the street suffix.
+     *
+     * Example:
+     * "1 Waterfall Ridge Shopping Centre 8 Ridge Road ..."
+     * becomes:
+     * "8 Ridge Road ..."
+     */
+    const suffixMatch=value.match(
+      /\b(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Boulevard|Blvd|Lane|Ln|Close|Crescent|Cres|Parkway|Highway)\b/i
     );
 
-    // Handles strings like:
-    // "1 Waterfall Ridge Shopping Centre 8 Ridge Road ..."
-    const streetSuffix=value.search(
-      /\\b(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Boulevard|Blvd|Lane|Ln|Close|Crescent|Cres|Parkway|Highway)\\b/i
-    );
-
-    if(streetSuffix>0){
-      const before=value.slice(0,streetSuffix);
-      const numbers=[...before.matchAll(/\\b\\d{1,5}\\b/g)];
+    if(suffixMatch){
+      const before=value.slice(0,suffixMatch.index);
+      const numbers=[...before.matchAll(/\b\d{1,5}\b/g)];
 
       if(numbers.length>1){
         const last=numbers[numbers.length-1];
@@ -247,14 +248,12 @@ export function extractLocalAddress(
       }
     }
 
-    // Stop when navigation/opening-hours/marketing copy starts.
     value=value.replace(
-      /\\b(?:Facebook|Instagram|HOME|ABOUT|STORE|DIRECT|Situated near|Located near|Trading Hours|Opening Hours|Directions|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|ptacold)\\b.*$/i,
+      /\b(?:Facebook|Instagram|HOME|ABOUT|STORE DIRECT|Situated near|Located near|Trading Hours|Opening Hours|Directions|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|ptacold)\b.*$/i,
       ''
     );
 
-    // A postal code is a strong natural end-of-address marker.
-    const postal=value.match(/\\b\\d{4}\\b/);
+    const postal=value.match(/\b\d{4}\b/);
 
     if(postal){
       value=value.slice(
@@ -262,9 +261,8 @@ export function extractLocalAddress(
         postal.index+postal[0].length
       );
     }else{
-      // Otherwise stop at a South African province when present.
       const province=value.match(
-        /\\b(Gauteng|Limpopo|Mpumalanga|North West|Free State|KwaZulu-Natal|Western Cape|Eastern Cape|Northern Cape)\\b/i
+        /\b(Gauteng|Limpopo|Mpumalanga|North West|Free State|KwaZulu-Natal|Western Cape|Eastern Cape|Northern Cape)\b/i
       );
 
       if(province){
@@ -276,9 +274,9 @@ export function extractLocalAddress(
     }
 
     value=value
-      .replace(/\\s+[A-Z]$/,'')
+      .replace(/\s+[A-Z]$/,'')
       .replace(/[|;:,.-]+$/,'')
-      .replace(/\\s+/g,' ')
+      .replace(/\s+/g,' ')
       .trim();
 
     return value.slice(0,180);
