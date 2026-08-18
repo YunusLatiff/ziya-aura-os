@@ -3,7 +3,15 @@ import {mutate,load} from './store.mjs';
 import {logEvent} from './orchestrator.mjs';
 import {DEFAULT_REGIONS,COMMON_EXCLUDED_DOMAINS} from './research-config.mjs';
 import {effectivePolicy} from './agent-policy.mjs';
-import {tavilySearch,geoapifyPlaceSearch,geoapifyPlaceDetails,fetchPublicPage,providerStatus,tavilyBudgetAvailable} from './providers.mjs';
+import {fetchPublicPage,providerStatus} from './providers.mjs';
+import {
+  localDiscoveryStatus,
+  localSearch,
+  researchWebsite,
+  tavilyFallbackSearch,
+  geoapifyFallbackSearch,
+  extractLocalAddress
+} from './discovery-router.mjs';
 import {cleanCompanyName,domainOf,dedupeKey,extractContacts,classifyLead,estimateUsage,isProbableDuplicate,sourceMatchesEntity,canonicalEntityName} from './lead-intelligence.mjs';
 import {reviewLead,reviewBatch} from './friday.mjs';
 import {findRegistryDuplicate,registerLead,markDuplicateSeen} from './lead-registry.mjs';
@@ -140,120 +148,434 @@ function personFromResult(result,company=''){
   return {person:person.trim(),role:contactRole.trim(),sourceUrl:result.url,detail:raw.slice(0,420)};
 }
 
-async function findContactPerson(company,domain){
-  if(!tavilyBudgetAvailable()) return null;
+async function findContactPerson(company,domain,region=''){
   const q=domain
     ? `"${company}" facilities manager OR operations manager OR property manager site:${domain}`
-    : `"${company}" facilities manager OR operations manager OR property manager South Africa`;
-  const rs=await tavilySearch(q,6,{excludeDomains:COMMON_EXCLUDED_DOMAINS});
-  for(const r of rs){
+    : `"${company}" facilities manager OR operations manager OR property manager ${region||'South Africa'}`;
+
+  // Keyless/local search first.
+  const local=await localSearch(q,8,{
+    excludeDomains:COMMON_EXCLUDED_DOMAINS
+  });
+
+  for(const r of local){
     if(!sourceMatchesEntity(r,company,domain?`https://${domain}`:'')) continue;
-    const p=personFromResult(r,company);if(p) return p;
+
+    const p=personFromResult(r,company);
+    if(p) return p;
   }
+
+  // Tavily is strictly last-resort and passes through the daily fallback gate.
+  const fallback=await tavilyFallbackSearch(
+    q,
+    6,
+    {excludeDomains:COMMON_EXCLUDED_DOMAINS},
+    `contact-person:${company}`
+  );
+
+  for(const r of fallback){
+    if(!sourceMatchesEntity(r,company,domain?`https://${domain}`:'')) continue;
+
+    const p=personFromResult(r,company);
+    if(p) return p;
+  }
+
   return null;
 }
 
 async function enrichCandidate(agent,candidate,context){
   const evidence=[];
   const sourceUrls=[];
+
   let companyName=candidate.companyName||cleanCompanyName(candidate.title||'');
   let address=candidate.address||'';
   let phone=normalizePhone(candidate.phone||'');
   let website=candidate.website||candidate.url||'';
+
   let aggregate=`${candidate.title||''} ${candidate.description||''} ${companyName} ${address}`;
 
   if(candidate.placeUrl){
     sourceUrls.push(candidate.placeUrl);
-    evidence.push({type:'PLACE',url:candidate.placeUrl,detail:`Geoapify/OpenStreetMap place record: ${companyName}${address?`, ${address}`:''}.`});
-  }
 
-  if(candidate.placeId){
-    try{
-      const d=await geoapifyPlaceDetails(candidate.placeId);
-      if(d){
-        if(!companyName&&d.name) companyName=d.name;
-        if(!address&&d.address) address=d.address;
-        if(!phone&&d.phone) phone=normalizePhone(d.phone);
-        if(!website&&d.website) website=d.website;
-        if(d.email) candidate.email=d.email;
-        if(d.buildingUnits&&!candidate.buildingUnits) candidate.buildingUnits=d.buildingUnits;
-        aggregate+=' '+[d.description,...(d.categories||[]),d.buildingUnits?`${d.buildingUnits} units`:''].filter(Boolean).join(' ');
-        evidence.push({type:'PLACE_DETAILS',url:candidate.placeUrl||'',detail:`Geoapify place details for ${companyName}${d.address?`, ${d.address}`:''}.`});
-      }
-    }catch(e){
-      logEvent(agent,'WARN','GEOAPIFY_DETAILS_ERROR',`${agent} could not enrich Geoapify place details.`,{error:String(e),placeId:candidate.placeId});
-    }
+    evidence.push({
+      type:'PLACE',
+      url:candidate.placeUrl,
+      detail:`Public place record: ${companyName}${address?`, ${address}`:''}.`
+    });
   }
 
   if(candidate.url){
     sourceUrls.push(candidate.url);
-    evidence.push({type:'SEARCH_RESULT',url:candidate.url,detail:(candidate.description||candidate.title||'').slice(0,700)});
+
+    evidence.push({
+      type:'SEARCH_RESULT',
+      url:candidate.url,
+      detail:(candidate.description||candidate.title||'').slice(0,700)
+    });
   }
 
-  let page;
+  // Do not treat social/directory/noise URLs as the official website.
+  if(website&&NOISE_DOMAINS.test(domainOf(website))){
+    website='';
+  }
+
+  // If discovery supplied only a company/place name, resolve its official site locally.
+  if(!website&&companyName){
+    const official=await localSearch(
+      `"${companyName}" ${context.region} official website`,
+      5,
+      {excludeDomains:COMMON_EXCLUDED_DOMAINS}
+    );
+
+    const match=
+      official.find(r=>sourceMatchesEntity(r,companyName,''))||
+      official[0];
+
+    if(match?.url){
+      website=match.url;
+
+      sourceUrls.push(match.url);
+
+      evidence.push({
+        type:'LOCAL_WEBSITE_RESOLUTION',
+        url:match.url,
+        detail:(match.description||match.title||'').slice(0,500)
+      });
+    }
+  }
+
+  let siteText='';
+  let sitePages=[];
+
+  // Autonomous Playwright investigation first.
   if(website){
-    page=await fetchPublicPage(website);
-    if(page.text){
-      aggregate+=' '+page.text.slice(0,180000);
-      sourceUrls.push(page.url);
-      evidence.push({type:'COMPANY_WEBSITE',url:page.url,detail:page.text.slice(0,700)});
-    }
-  }
-
-  // Validate/enrich the physical location only after the candidate has passed the noise filter.
-  if(!address&&companyName&&providerStatus().geoapify.configured){
-    try{
-      const places=await geoapifyPlaceSearch(`${companyName} ${context.region}`,3);
-      const p=places.find(x=>x.companyName&&!GENERIC_NAMES.test(cleanCompanyName(x.companyName)))||places[0];
-      if(p){
-        address=p.address||address;
-        candidate.placeId=p.placeId||candidate.placeId;
-        candidate.placeUrl=p.placeUrl||candidate.placeUrl;
-        if(p.placeUrl&&!sourceUrls.includes(p.placeUrl)) sourceUrls.push(p.placeUrl);
-        evidence.push({type:'PLACE_VALIDATION',url:p.placeUrl||'',detail:`Geoapify validation for ${companyName}: ${p.address||'location match'}.`});
+    const crawl=await researchWebsite(
+      website,
+      {
+        maxPages:4,
+        delayMs:500
       }
-    }catch(e){
-      logEvent(agent,'WARN','GEOAPIFY_SEARCH_ERROR',`${agent} could not validate candidate location.`,{error:String(e),companyName});
+    );
+
+    if(crawl?.text){
+      siteText=crawl.text;
+      sitePages=crawl.pages||[];
+
+      aggregate+=' '+siteText.slice(0,180000);
+
+      for(const p of sitePages){
+        if(p?.url) sourceUrls.push(p.url);
+      }
+
+      evidence.push({
+        type:'LOCAL_WEBSITE_CRAWL',
+        url:sitePages[0]?.url||website,
+        detail:siteText.slice(0,700)
+      });
+    }else{
+      // Cheap direct HTTP fallback; still no API key or search credit.
+      const direct=await fetchPublicPage(website);
+
+      if(direct.text){
+        siteText=direct.text;
+
+        aggregate+=' '+siteText.slice(0,180000);
+
+        sourceUrls.push(direct.url||website);
+
+        evidence.push({
+          type:'COMPANY_WEBSITE',
+          url:direct.url||website,
+          detail:siteText.slice(0,700)
+        });
+      }
     }
   }
 
-  const domain=domainOf(website);
-  let contacts=extractContacts(page?.text||'');
-  if(candidate.email) contacts.emails=[candidate.email,...contacts.emails];
-  if((!contacts.emails.length||!phone)&&tavilyBudgetAvailable()){
-    const contactResults=await tavilySearch(`"${companyName}" contact email phone ${context.region}`,5,{excludeDomains:COMMON_EXCLUDED_DOMAINS});
+  // Extract an address from the company's own website before any geocoding API.
+  if(!address&&siteText){
+    const locallyFound=extractLocalAddress(
+      siteText,
+      context.region
+    );
+
+    if(locallyFound){
+      address=locallyFound;
+
+      evidence.push({
+        type:'LOCAL_ADDRESS',
+        url:sitePages[0]?.url||website,
+        detail:`Address extracted from public company website: ${address}`
+      });
+    }
+  }
+
+  // Use free/local search snippets as a second address source.
+  if(!address&&companyName){
+    const addressResults=await localSearch(
+      `"${companyName}" address location ${context.region}`,
+      6,
+      {excludeDomains:COMMON_EXCLUDED_DOMAINS}
+    );
+
+    for(const r of addressResults){
+      if(!sourceMatchesEntity(r,companyName,website)) continue;
+
+      const found=extractLocalAddress(
+        `${r.title||''} ${r.description||''}`,
+        context.region
+      );
+
+      if(!found) continue;
+
+      address=found;
+      sourceUrls.push(r.url);
+
+      evidence.push({
+        type:'LOCAL_ADDRESS_SEARCH',
+        url:r.url,
+        detail:(r.description||r.title||'').slice(0,500)
+      });
+
+      break;
+    }
+  }
+
+  // Geoapify now runs only when local methods could not establish an address.
+  if(!address&&companyName){
+    const places=await geoapifyFallbackSearch(
+      `${companyName} ${context.region}`,
+      3,
+      `address:${companyName}`
+    );
+
+    const p=
+      places.find(x=>
+        x.companyName &&
+        !GENERIC_NAMES.test(cleanCompanyName(x.companyName))
+      ) ||
+      places[0];
+
+    if(p){
+      address=p.address||address;
+
+      candidate.placeId=p.placeId||candidate.placeId;
+      candidate.placeUrl=p.placeUrl||candidate.placeUrl;
+
+      if(p.placeUrl){
+        sourceUrls.push(p.placeUrl);
+      }
+
+      evidence.push({
+        type:'PLACE_VALIDATION_FALLBACK',
+        url:p.placeUrl||'',
+        detail:`Geoapify fallback validation for ${companyName}: ${p.address||'location match'}.`
+      });
+    }
+  }
+
+  let contacts=extractContacts(siteText);
+
+  if(candidate.email){
+    contacts.emails=[
+      candidate.email,
+      ...contacts.emails
+    ];
+  }
+
+  if(candidate.phone&&!phone){
+    phone=normalizePhone(candidate.phone);
+  }
+
+  // Keyless SearXNG contact enrichment.
+  if(!contacts.emails.length||!phone){
+    const contactResults=await localSearch(
+      `"${companyName}" contact email phone ${context.region}`,
+      6,
+      {excludeDomains:COMMON_EXCLUDED_DOMAINS}
+    );
+
     for(const r of contactResults){
       if(!sourceMatchesEntity(r,companyName,website)) continue;
+
       aggregate+=' '+(r.description||'');
-      if(!sourceUrls.includes(r.url)) sourceUrls.push(r.url);
-      evidence.push({type:'CONTACT_SEARCH',url:r.url,detail:(r.description||r.title||'').slice(0,500)});
-      const c=extractContacts(`${r.title} ${r.description}`);
-      contacts={emails:[...new Set([...contacts.emails,...c.emails])],phones:[...new Set([...contacts.phones,...c.phones])]};
+
+      if(r.url) sourceUrls.push(r.url);
+
+      evidence.push({
+        type:'LOCAL_CONTACT_SEARCH',
+        url:r.url,
+        detail:(r.description||r.title||'').slice(0,500)
+      });
+
+      const extracted=extractContacts(
+        `${r.title||''} ${r.description||''}`
+      );
+
+      contacts={
+        emails:[
+          ...new Set([
+            ...contacts.emails,
+            ...extracted.emails
+          ])
+        ],
+        phones:[
+          ...new Set([
+            ...contacts.phones,
+            ...extracted.phones
+          ])
+        ]
+      };
     }
   }
-  if(!phone) phone=contacts.phones[0]||'';
+
+  // Tavily only if local website + local search still failed.
+  if(!contacts.emails.length||(!phone&&!contacts.phones.length)){
+    const contactResults=await tavilyFallbackSearch(
+      `"${companyName}" contact email phone ${context.region}`,
+      5,
+      {excludeDomains:COMMON_EXCLUDED_DOMAINS},
+      `contacts:${companyName}`
+    );
+
+    for(const r of contactResults){
+      if(!sourceMatchesEntity(r,companyName,website)) continue;
+
+      aggregate+=' '+(r.description||'');
+
+      if(r.url) sourceUrls.push(r.url);
+
+      evidence.push({
+        type:'CONTACT_SEARCH_FALLBACK',
+        url:r.url,
+        detail:(r.description||r.title||'').slice(0,500)
+      });
+
+      const extracted=extractContacts(
+        `${r.title||''} ${r.description||''}`
+      );
+
+      contacts={
+        emails:[
+          ...new Set([
+            ...contacts.emails,
+            ...extracted.emails
+          ])
+        ],
+        phones:[
+          ...new Set([
+            ...contacts.phones,
+            ...extracted.phones
+          ])
+        ]
+      };
+    }
+  }
+
+  if(!phone){
+    phone=contacts.phones[0]||'';
+  }
+
   const email=selectEmail(contacts.emails);
 
-  const classification=classifyLead(agent,aggregate,candidate.types||[]);
-  const usage=estimateUsage(agent,classification.facilityType,classification.signals);
-  const person=await findContactPerson(companyName,domain);
-  if(person){sourceUrls.push(person.sourceUrl);evidence.push({type:'CONTACT_PERSON',url:person.sourceUrl,detail:person.detail})}
+  const classification=classifyLead(
+    agent,
+    aggregate,
+    candidate.types||[]
+  );
+
+  const usage=estimateUsage(
+    agent,
+    classification.facilityType,
+    classification.signals
+  );
+
+  const domain=domainOf(website);
+
+  const person=await findContactPerson(
+    companyName,
+    domain,
+    context.region
+  );
+
+  if(person){
+    sourceUrls.push(person.sourceUrl);
+
+    evidence.push({
+      type:'CONTACT_PERSON',
+      url:person.sourceUrl,
+      detail:person.detail
+    });
+  }
 
   const lead={
-    id:crypto.randomUUID(),batchId:context.batchId,agent,createdAt:now(),updatedAt:now(),
-    companyName,address,contactPerson:person?.person||'',contactRole:person?.role||'',contactNumber:phone,email,website,
-    placeId:candidate.placeId||'',lat:candidate.lat??null,lon:candidate.lon??null,
-    facilityType:classification.facilityType,sector:context.sector,region:context.region,
-    estimatedKwhMin:usage.min,estimatedKwhMax:usage.max,usageConfidence:usage.confidence,usageMethod:usage.method,
-    unitCount:classification.signals.unitCount||Number(candidate.buildingUnits)||null,facilityAreaM2:classification.signals.areaM2||null,
-    evidence:evidence.slice(0,15),sourceUrls:[...new Set(sourceUrls)].slice(0,15),
-    fridayStatus:'PENDING',fridayScore:null,fridayReasons:[],dedupeKey:'',status:'DISCOVERED'
+    id:crypto.randomUUID(),
+    batchId:context.batchId,
+    agent,
+    createdAt:now(),
+    updatedAt:now(),
+
+    companyName,
+    address,
+    contactPerson:person?.person||'',
+    contactRole:person?.role||'',
+    contactNumber:phone,
+    email,
+    website,
+
+    placeId:candidate.placeId||'',
+    lat:candidate.lat??null,
+    lon:candidate.lon??null,
+
+    facilityType:classification.facilityType,
+    sector:context.sector,
+    region:context.region,
+
+    estimatedKwhMin:usage.min,
+    estimatedKwhMax:usage.max,
+    usageConfidence:usage.confidence,
+    usageMethod:usage.method,
+
+    unitCount:
+      classification.signals.unitCount||
+      Number(candidate.buildingUnits)||
+      null,
+
+    facilityAreaM2:
+      classification.signals.areaM2||
+      null,
+
+    evidence:[
+      ...new Map(
+        evidence.map(e=>[
+          `${e.type}|${e.url}|${e.detail}`,
+          e
+        ])
+      ).values()
+    ].slice(0,15),
+
+    sourceUrls:[
+      ...new Set(sourceUrls.filter(Boolean))
+    ].slice(0,15),
+
+    fridayStatus:'PENDING',
+    fridayScore:null,
+    fridayReasons:[],
+    dedupeKey:'',
+    status:'DISCOVERED'
   };
+
   lead.dedupeKey=dedupeKey(lead);
   lead.canonicalName=canonicalEntityName(lead.companyName);
+
   const integrity=preFridayIntegrity(lead);
-  lead.integrityStatus=integrity.ok?'PASS':'FAIL';
-  lead.integrityReasons=integrity.reasons;
+
+  lead.integrityStatus=
+    integrity.ok?'PASS':'FAIL';
+
+  lead.integrityReasons=
+    integrity.reasons;
+
   return lead;
 }
 
@@ -261,31 +583,100 @@ async function discover(agent,batch){
   const profile=effectivePolicy(agent).research;
   const regionList=regions();
   const cursor=batch.searchCursor||0;
-  const region=regionList[cursor%regionList.length];
-  const sector=profile.sectors[Math.floor(cursor/regionList.length)%profile.sectors.length];
-  const query=`${sector} ${region}`;
-  const candidates=[];const seen=new Set();
 
-  // Cheap first pass: Geoapify. Tavily is now an enrichment/fallback source, not the primary crawler.
-  if(providerStatus().geoapify.configured){
-    const places=await geoapifyPlaceSearch(query,12);
+  const region=
+    regionList[cursor%regionList.length];
+
+  const sector=
+    profile.sectors[
+      Math.floor(cursor/regionList.length)%
+      profile.sectors.length
+    ];
+
+  const query=`${sector} ${region}`;
+
+  const candidates=[];
+  const seen=new Set();
+
+  // v0.9 PRIMARY DISCOVERY:
+  // local SearXNG - no Tavily/Geoapify credit.
+  const local=await localSearch(
+    query,
+    12,
+    {excludeDomains:COMMON_EXCLUDED_DOMAINS}
+  );
+
+  for(const r of local){
+    if(!looksLikeCandidate(agent,r)) continue;
+
+    const k=(
+      domainOf(r.url)||
+      canonicalEntityName(r.title)
+    ).toLowerCase();
+
+    if(!k||seen.has(k)) continue;
+
+    seen.add(k);
+    candidates.push(r);
+  }
+
+  // Geoapify only when local discovery did not produce enough viable candidates.
+  if(candidates.length<4){
+    const places=await geoapifyFallbackSearch(
+      query,
+      12,
+      `discovery:${agent}:${sector}:${region}`
+    );
+
     for(const p of places){
       if(!looksLikeCandidate(agent,p)) continue;
-      const k=(p.placeId||`${canonicalEntityName(p.companyName)}|${p.address||''}`).toLowerCase();
-      if(!k||seen.has(k)) continue;seen.add(k);candidates.push(p);
+
+      const k=(
+        p.placeId||
+        `${canonicalEntityName(p.companyName)}|${p.address||''}`
+      ).toLowerCase();
+
+      if(!k||seen.has(k)) continue;
+
+      seen.add(k);
+      candidates.push(p);
     }
   }
 
-  // Only spend a Tavily search when Geoapify did not supply enough viable candidates.
-  if(candidates.length<4&&tavilyBudgetAvailable()){
-    const web=await tavilySearch(`${sector} ${region} company address contact`,8,{excludeDomains:COMMON_EXCLUDED_DOMAINS});
+  // Tavily is now the final discovery source, behind its daily fallback cap.
+  if(candidates.length<4){
+    const web=await tavilyFallbackSearch(
+      `${sector} ${region} company address contact`,
+      8,
+      {excludeDomains:COMMON_EXCLUDED_DOMAINS},
+      `discovery:${agent}:${sector}:${region}`
+    );
+
     for(const r of web){
       if(!looksLikeCandidate(agent,r)) continue;
-      const k=(domainOf(r.url)||canonicalEntityName(r.title)).toLowerCase();
-      if(!k||seen.has(k)) continue;seen.add(k);candidates.push(r);
+
+      const k=(
+        domainOf(r.url)||
+        canonicalEntityName(r.title)
+      ).toLowerCase();
+
+      if(!k||seen.has(k)) continue;
+
+      seen.add(k);
+      candidates.push(r);
     }
   }
-  return {candidates:candidates.slice(0,Number(profile.maxCandidatesPerQuery||8)),region,sector,query,nextCursor:cursor+1};
+
+  return {
+    candidates:candidates.slice(
+      0,
+      Number(profile.maxCandidatesPerQuery||8)
+    ),
+    region,
+    sector,
+    query,
+    nextCursor:cursor+1
+  };
 }
 
 export function ensureBatch(agent){
@@ -441,9 +832,29 @@ export function fridayReviewLead(leadId){
 
 export async function researchStep(agent){
   const providers=providerStatus();
-  if(!providers.geoapify.configured&&!providers.tavily.configured){
-    mutate(db=>{if(db.agents[agent]){db.agents[agent].status='BLOCKED';db.agents[agent].lastError=null;db.agents[agent].currentTask='Waiting for a public research provider.';db.agents[agent].lastHeartbeat=now()}});
-    logEvent(agent,'WARN','RESEARCH_BLOCKED',`${agent} cannot research: Geoapify and Tavily are both unavailable.`);
+  const localDiscovery=localDiscoveryStatus();
+
+  if(
+    !localDiscovery.enabled &&
+    !providers.geoapify.configured &&
+    !providers.tavily.configured
+  ){
+    mutate(db=>{
+      if(db.agents[agent]){
+        db.agents[agent].status='BLOCKED';
+        db.agents[agent].lastError=null;
+        db.agents[agent].currentTask='Waiting for a public research provider.';
+        db.agents[agent].lastHeartbeat=now();
+      }
+    });
+
+    logEvent(
+      agent,
+      'WARN',
+      'RESEARCH_BLOCKED',
+      `${agent} cannot research: local discovery and fallback providers are unavailable.`
+    );
+
     return {blocked:true};
   }
 
